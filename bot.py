@@ -1,7 +1,10 @@
 import os
 import asyncio
 import logging
+import json
 import requests
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta, timezone
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
@@ -266,9 +269,9 @@ async def callback_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("📰 Получить дайджест", callback_data="refresh")]])
     await update.message.reply_text(
-        "Привет! Я бот-дайджест.\n"
-        "/digest — получить дайджест прямо сейчас\n"
-        "Каждый день в 09:00 МСК я шлю дайджест автоматически.",
+        "Привет! Я Самарский Селянин, повелитель грядок и местных интриг.\n"
+        "Каждый день ровно в 09:00 МСК я высылаю тебе дайджест, пока ты допиваешь кофе.\n"
+        "Жми /digest, если хочешь узнать, кто из региональных политиков сегодня опять обещал золотые горы, но пока принёс только песок."
         reply_markup=keyboard
     )
 
@@ -319,5 +322,26 @@ async def main():
         await app.shutdown()
 
 
+# ─────────────────────────────────────────────
+# Health check сервер (чтобы Render не засыпал)
+# ─────────────────────────────────────────────
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+    def log_message(self, format, *args):
+        pass  # отключаем лишние логи
+
+
+def run_health_server():
+    port = int(os.getenv("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    server.serve_forever()
+
+
 if __name__ == "__main__":
+    # Запускаем health check в фоне
+    threading.Thread(target=run_health_server, daemon=True).start()
     asyncio.run(main())
