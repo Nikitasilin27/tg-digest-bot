@@ -239,6 +239,43 @@ def build_digest():
 
 
 # ─────────────────────────────────────────────
+# Праздники с calend.ru
+# ─────────────────────────────────────────────
+def get_holidays(days=1):
+    import feedparser
+    feed = feedparser.parse("https://www.calend.ru/calendar/feed/")
+    now_msk = datetime.now(timezone(timedelta(hours=3)))
+    results = []
+
+    for entry in feed.entries:
+        try:
+            pub = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
+            pub_msk = pub.astimezone(timezone(timedelta(hours=3)))
+        except Exception:
+            continue
+
+        delta = (pub_msk.date() - now_msk.date()).days
+        if 0 <= delta < days:
+            date_str = pub_msk.strftime("%d.%m")
+            results.append((date_str, entry.title.strip()))
+
+    if not results:
+        return "🗓 Праздников не найдено."
+
+    lines = []
+    current_date = None
+    for date_str, title in results:
+        if date_str != current_date:
+            lines.append(f"\n📅 {date_str}")
+            current_date = date_str
+        lines.append(f"  • {title}")
+
+    period = "сегодня" if days == 1 else f"ближайшие {days} дней"
+    header = f"🎉 Праздники ({period}):\n"
+    return header + "\n".join(lines)
+
+
+# ─────────────────────────────────────────────
 # 5. Команды бота
 # ─────────────────────────────────────────────
 async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -266,14 +303,34 @@ async def callback_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await loading_msg.edit_text(f"❌ Ошибка: {e}")
 
 
+async def callback_holidays_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    loading_msg = await query.message.reply_text("⏳ Загружаю праздники...")
+    text = get_holidays(days=1)
+    await loading_msg.edit_text(text)
+
+
+async def callback_holidays_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    loading_msg = await query.message.reply_text("⏳ Загружаю праздники...")
+    text = get_holidays(days=7)
+    await loading_msg.edit_text(text)
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("📰 Получить дайджест", callback_data="refresh")]])
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📰 Получить дайджест", callback_data="refresh")],
+        [
+            InlineKeyboardButton("🎉 Праздники на день", callback_data="holidays_day"),
+            InlineKeyboardButton("📆 Праздники на неделю", callback_data="holidays_week"),
+        ]
+    ])
     await update.message.reply_text(
-        text=(
-            "Привет! Я Самарский Селянин, повелитель грядок и местных интриг.\n"
-            "Каждый день ровно в 09:00 МСК я высылаю тебе дайджест, пока ты доливаешь третью кружку кофе.\n"
-            "Жми /digest, если хочешь узнать, кто из региональных политиков сегодня опять обещал золотые горы, но пока принёс только песок."
-        ),
+        "Привет! Я бот-дайджест.\n"
+        "/digest — получить дайджест прямо сейчас\n"
+        "Каждый день в 09:00 МСК я шлю дайджест автоматически.",
         reply_markup=keyboard
     )
 
@@ -298,6 +355,8 @@ async def main():
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("digest", cmd_digest))
     app.add_handler(CallbackQueryHandler(callback_refresh, pattern="^refresh$"))
+    app.add_handler(CallbackQueryHandler(callback_holidays_day, pattern="^holidays_day$"))
+    app.add_handler(CallbackQueryHandler(callback_holidays_week, pattern="^holidays_week$"))
 
     scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
     scheduler.add_job(
