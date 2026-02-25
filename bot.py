@@ -243,36 +243,32 @@ def build_digest():
 # ─────────────────────────────────────────────
 def get_holidays(days=1):
     import feedparser
-    feed = feedparser.parse("https://www.calend.ru/calendar/feed/")
     now_msk = datetime.now(timezone(timedelta(hours=3)))
-    results = []
+    all_lines = []
 
-    for entry in feed.entries:
-        try:
-            pub = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
-            pub_msk = pub.astimezone(timezone(timedelta(hours=3)))
-        except Exception:
-            continue
+    for delta in range(days):
+        target = now_msk + timedelta(days=delta)
+        url = f"https://www.calend.ru/day/{target.year}-{target.month}-{target.day}/feed/"
+        feed = feedparser.parse(url)
 
-        delta = (pub_msk.date() - now_msk.date()).days
-        if 0 <= delta < days:
-            date_str = pub_msk.strftime("%d.%m")
-            results.append((date_str, entry.title.strip()))
+        day_titles = []
+        for entry in feed.entries:
+            title = entry.title.strip()
+            if title:
+                day_titles.append(f"  • {title}")
 
-    if not results:
+        if day_titles:
+            date_str = target.strftime("%d.%m (%a)").replace(
+                "Mon", "Пн").replace("Tue", "Вт").replace("Wed", "Ср").replace(
+                "Thu", "Чт").replace("Fri", "Пт").replace("Sat", "Сб").replace("Sun", "Вс")
+            all_lines.append(f"\n📅 {date_str}")
+            all_lines.extend(day_titles)
+
+    if not all_lines:
         return "🗓 Праздников не найдено."
 
-    lines = []
-    current_date = None
-    for date_str, title in results:
-        if date_str != current_date:
-            lines.append(f"\n📅 {date_str}")
-            current_date = date_str
-        lines.append(f"  • {title}")
-
     period = "сегодня" if days == 1 else f"ближайшие {days} дней"
-    header = f"🎉 Праздники ({period}):\n"
-    return header + "\n".join(lines)
+    return f"🎉 Праздники ({period}):\n" + "\n".join(all_lines)
 
 
 # ─────────────────────────────────────────────
