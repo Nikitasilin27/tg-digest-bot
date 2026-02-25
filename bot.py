@@ -242,27 +242,35 @@ def build_digest():
 # Праздники с calend.ru
 # ─────────────────────────────────────────────
 def get_holidays(days=1):
-    import feedparser
     now_msk = datetime.now(timezone(timedelta(hours=3)))
+    headers = {"User-Agent": "Mozilla/5.0"}
     all_lines = []
+
+    day_names = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 
     for delta in range(days):
         target = now_msk + timedelta(days=delta)
-        url = f"https://www.calend.ru/day/{target.year}-{target.month}-{target.day}/feed/"
-        feed = feedparser.parse(url)
+        url = f"https://www.calend.ru/day/{target.year}-{target.month}-{target.day}/"
+        try:
+            resp = requests.get(url, headers=headers, timeout=10)
+            soup = BeautifulSoup(resp.text, "html.parser")
 
-        day_titles = []
-        for entry in feed.entries:
-            title = entry.title.strip()
-            if title:
-                day_titles.append(f"  • {title}")
+            # Праздники в блоке ul.holidays
+            holiday_titles = []
+            for block in soup.select("ul.holidays li"):
+                title_tag = block.find("a") or block.find("span")
+                if title_tag:
+                    title = title_tag.get_text(strip=True)
+                    if title:
+                        holiday_titles.append(f"  • {title}")
 
-        if day_titles:
-            date_str = target.strftime("%d.%m (%a)").replace(
-                "Mon", "Пн").replace("Tue", "Вт").replace("Wed", "Ср").replace(
-                "Thu", "Чт").replace("Fri", "Пт").replace("Sat", "Сб").replace("Sun", "Вс")
-            all_lines.append(f"\n📅 {date_str}")
-            all_lines.extend(day_titles)
+            if holiday_titles:
+                day_name = day_names[target.weekday()]
+                date_str = target.strftime(f"%d.%m ({day_name})")
+                all_lines.append(f"\n📅 {date_str}")
+                all_lines.extend(holiday_titles)
+        except Exception as e:
+            logger.warning(f"Ошибка загрузки праздников за {target.date()}: {e}")
 
     if not all_lines:
         return "🗓 Праздников не найдено."
