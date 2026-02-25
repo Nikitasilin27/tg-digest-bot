@@ -257,6 +257,7 @@ def get_holidays(days=1):
 
             # Праздники в блоке ul.holidays
             holiday_titles = []
+            logger.info(f"Calend HTML snippet: {soup.body and str(soup.body)[:2000]}")
             for block in soup.select("ul.holidays li"):
                 title_tag = block.find("a") or block.find("span")
                 if title_tag:
