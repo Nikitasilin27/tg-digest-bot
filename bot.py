@@ -247,18 +247,26 @@ def get_holidays(days=1):
     feed = feedparser.parse("https://www.calend.ru/calendar/feed/")
 
     if days == 1:
-        # Только сегодня через RSS
-        titles = []
+        # Ищем запись с сегодняшней датой в заголовке
+        today_day = now_msk.day
+        today_month = now_msk.month
+        # Месяцы на русском
+        months = ["января","февраля","марта","апреля","мая","июня",
+                  "июля","августа","сентября","октября","ноября","декабря"]
+        today_str = f"{today_day} {months[today_month-1]}"
+
         for entry in feed.entries:
             title = entry.title.strip()
-            if title:
-                titles.append(f"  • {title}")
+            if today_str in title:
+                # Разбиваем по двоеточию — после него идут сами праздники
+                if ":" in title:
+                    holidays_part = title.split(":", 1)[1].strip()
+                    items = [h.strip() for h in holidays_part.split(",") if h.strip()]
+                    lines = "\n".join(f"  • {item}" for item in items)
+                    date_str = now_msk.strftime("%d.%m")
+                    return f"🎉 Праздники на сегодня ({date_str}):\n{lines}"
 
-        if not titles:
-            return "🗓 Праздников не найдено."
-
-        date_str = now_msk.strftime("%d.%m")
-        return f"🎉 Праздники на сегодня ({date_str}):\n" + "\n".join(titles)
+        return "🗓 Праздников на сегодня не найдено."
 
     else:
         return "🗓 Функция в разработке."
