@@ -269,11 +269,11 @@ async def callback_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("📰 Получить дайджест", callback_data="refresh")]])
     await update.message.reply_text(
-        message=(
+        text=(
             "Привет! Я Самарский Селянин, повелитель грядок и местных интриг.\n"
             "Каждый день ровно в 09:00 МСК я высылаю тебе дайджест, пока ты доливаешь третью кружку кофе.\n"
             "Жми /digest, если хочешь узнать, кто из региональных политиков сегодня опять обещал золотые горы, но пока принёс только песок."
-        )
+        ),
         reply_markup=keyboard
     )
 
