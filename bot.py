@@ -12,12 +12,15 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
+import json
+
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GIGACHAT_CREDENTIALS = os.getenv("GIGACHAT_CREDENTIALS")
 SHEET_ID = os.getenv("SHEET_ID")
 CHAT_ID = int(os.getenv("CHAT_ID"))
+GOOGLE_CREDENTIALS = os.getenv("GOOGLE_CREDENTIALS")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -31,7 +34,8 @@ def get_channels_from_sheet():
         "https://www.googleapis.com/auth/spreadsheets.readonly",
         "https://www.googleapis.com/auth/drive.readonly",
     ]
-    creds = Credentials.from_service_account_file("credentials.json", scopes=scopes)
+    creds_dict = json.loads(GOOGLE_CREDENTIALS)
+    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
     client = gspread.authorize(creds)
     sheet = client.open_by_key(SHEET_ID).worksheet("Мониторинг")
     values = sheet.col_values(3)  # столбец C
