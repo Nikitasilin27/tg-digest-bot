@@ -242,42 +242,26 @@ def build_digest():
 # Праздники с calend.ru
 # ─────────────────────────────────────────────
 def get_holidays(days=1):
+    import feedparser
     now_msk = datetime.now(timezone(timedelta(hours=3)))
-    headers = {"User-Agent": "Mozilla/5.0"}
-    all_lines = []
+    feed = feedparser.parse("https://www.calend.ru/calendar/feed/")
 
-    day_names = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+    if days == 1:
+        # Только сегодня через RSS
+        titles = []
+        for entry in feed.entries:
+            title = entry.title.strip()
+            if title:
+                titles.append(f"  • {title}")
 
-    for delta in range(days):
-        target = now_msk + timedelta(days=delta)
-        url = f"https://www.calend.ru/day/{target.year}-{target.month}-{target.day}/"
-        try:
-            resp = requests.get(url, headers=headers, timeout=10)
-            soup = BeautifulSoup(resp.text, "html.parser")
+        if not titles:
+            return "🗓 Праздников не найдено."
 
-            # Праздники в блоке ul.holidays
-            holiday_titles = []
-            logger.info(f"Calend HTML snippet: {soup.body and str(soup.body)[:2000]}")
-            for block in soup.select("ul.holidays li"):
-                title_tag = block.find("a") or block.find("span")
-                if title_tag:
-                    title = title_tag.get_text(strip=True)
-                    if title:
-                        holiday_titles.append(f"  • {title}")
+        date_str = now_msk.strftime("%d.%m")
+        return f"🎉 Праздники на сегодня ({date_str}):\n" + "\n".join(titles)
 
-            if holiday_titles:
-                day_name = day_names[target.weekday()]
-                date_str = target.strftime(f"%d.%m ({day_name})")
-                all_lines.append(f"\n📅 {date_str}")
-                all_lines.extend(holiday_titles)
-        except Exception as e:
-            logger.warning(f"Ошибка загрузки праздников за {target.date()}: {e}")
-
-    if not all_lines:
-        return "🗓 Праздников не найдено."
-
-    period = "сегодня" if days == 1 else f"ближайшие {days} дней"
-    return f"🎉 Праздники ({period}):\n" + "\n".join(all_lines)
+    else:
+        return "🗓 Функция в разработке."
 
 
 # ─────────────────────────────────────────────
