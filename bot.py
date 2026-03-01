@@ -148,10 +148,17 @@ def get_summaries(channels_data):
         prompt_parts.append(f"{i}. @{ch['username']}: {posts_joined}")
 
     prompt = (
-        "Ты — редактор новостного дайджеста. "
-        "Для каждого канала ниже напиши ОДНУ строку резюме на русском языке (максимум 80 символов). "
-        "Формат ответа — только пронумерованный список, без лишних слов.\n\n"
-        + "\n".join(prompt_parts)
+            "Ты — редактор регионального политического дайджеста. "
+            "Твоя задача: для каждого Telegram-канала ниже написать ОДНУ строку резюме на русском языке.\n\n"
+            "Правила:\n"
+            "— Максимум 80 символов на резюме\n"
+            "— Только суть: кто + что сделал/сказал/решил\n"
+            "— Без вводных слов ('канал сообщает', 'автор пишет' и т.д.)\n"
+            "— Без имён пользователей и ссылок\n"
+            "— Если постов нет или они нерелевантны — пропусти номер\n"
+            "— Формат ответа: только пронумерованный список, ничего лишнего\n\n"
+            "Каналы:\n"
+            + "\n".join(prompt_parts)
     )
 
     try:
@@ -242,34 +249,47 @@ def build_digest():
 # Праздники с calend.ru
 # ─────────────────────────────────────────────
 def get_holidays(days=1):
-    import feedparser
     now_msk = datetime.now(timezone(timedelta(hours=3)))
-    feed = feedparser.parse("https://www.calend.ru/calendar/feed/")
+    day_names = ["Пн","Вт","Ср","Чт","Пт","Сб","Вс"]
+    headers = {"User-Agent": "Mozilla/5.0"}
+    lines = []
 
-    if days == 1:
-        # Ищем запись с сегодняшней датой в заголовке
-        today_day = now_msk.day
-        today_month = now_msk.month
-        # Месяцы на русском
-        months = ["января","февраля","марта","апреля","мая","июня",
-                  "июля","августа","сентября","октября","ноября","декабря"]
-        today_str = f"{today_day} {months[today_month-1]}"
+    for delta in range(days):
+        target = (now_msk + timedelta(days=delta))
+        url = f"https://www.calend.ru/day/{target.year}-{target.month}-{target.day}/"
+        try:
+            resp = requests.get(url, headers=headers, timeout=10)
+            soup = BeautifulSoup(resp.text, "html.parser")
 
-        for entry in feed.entries:
-            title = entry.title.strip()
-            if today_str in title:
-                # Разбиваем по двоеточию — после него идут сами праздники
-                if ":" in title:
-                    holidays_part = title.split(":", 1)[1].strip()
-                    items = [h.strip() for h in holidays_part.split(",") if h.strip()]
-                    lines = "\n".join(f"  • {item}" for item in items)
-                    date_str = now_msk.strftime("%d.%m")
-                    return f"🎉 Праздники на сегодня ({date_str}):\n{lines}"
+            # Ищем заголовок страницы с праздниками — он в теге h1 или title
+            items = []
+            # Все ссылки ведущие на /holidays/ — это и есть праздники дня
+            seen = set()
+            for a in soup.find_all("a", href=True):
+                href = a.get("href", "")
+                if "/holidays/" in href or "/events/" in href:
+                    title = a.get_text(strip=True)
+                    if title and len(title) > 4 and title not in seen:
+                        seen.add(title)
+                        items.append(f"  • {title}")
 
-        return "🗓 Праздников на сегодня не найдено."
+            if items:
+                day_name = day_names[target.weekday()]
+                date_str = target.strftime(f"%d.%m ({day_name})")
+                lines.append(f"\n📅 {date_str}:")
+                lines.extend(items[:10])  # максимум 10 праздников на день
 
-    else:
-        return "🗓 Функция в разработке."
+        except Exception as e:
+            logger.warning(f"Ошибка загрузки праздников {target.date()}: {e}")
+
+    if not lines:
+        return "🗓 Праздников не найдено."
+
+    period = "сегодня" if days == 1 else f"ближайшие {days} дней"
+    result = f"🎉 Праздники ({period}):\n" + "\n".join(lines)
+    if len(result) > 4096:
+        result = result[:4090] + "\n…"
+    return result
 
 
 # ─────────────────────────────────────────────
