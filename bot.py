@@ -263,15 +263,13 @@ def get_holidays(days=1):
 
             # Ищем заголовок страницы с праздниками — он в теге h1 или title
             items = []
-            # Все ссылки ведущие на /holidays/ — это и есть праздники дня
             seen = set()
-            for a in soup.find_all("a", href=True):
-                href = a.get("href", "")
-                if "/holidays/" in href or "/events/" in href:
-                    title = a.get_text(strip=True)
-                    if title and len(title) > 4 and title not in seen:
-                        seen.add(title)
-                        items.append(f"  • {title}")
+            # Праздники в div.block.holidays (не famous-date — это компании и города)
+            for block in soup.select("div.block.holidays:not(.famous-date) ul.itemsNet li span.title a"):
+                title = block.get_text(strip=True)
+                if title and title not in seen:
+                    seen.add(title)
+                    items.append(f"  • {title}")
 
             if items:
                 day_name = day_names[target.weekday()]
@@ -346,8 +344,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ])
     await update.message.reply_text(
         "Привет! Я бот-дайджест.\n"
-        "/digest — получить дайджест прямо сейчас\n"
-        "Каждый день в 09:00 МСК я шлю дайджест автоматически.",
+        "Каждый день в 09:00 МСК я шлю дайджест автоматически\n",
+        "Нажми кнопку ниже, чтобы получить праздники или дайджест",
         reply_markup=keyboard
     )
 
