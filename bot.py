@@ -14,6 +14,8 @@ from gigachat import GigaChat
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from monitor import run_monitoring, format_monitoring_report
+from db import init_db
 
 import json
 
@@ -362,6 +364,18 @@ async def scheduled_digest(app):
     except Exception as e:
         logger.error(f"Ошибка при отправке по расписанию: {e}")
 
+async def scheduled_monitoring(app):
+    """Фоновый мониторинг: сбор постов + поиск фамилий каждые 2 часа."""
+    try:
+        result = await run_monitoring()
+        report = format_monitoring_report(result)
+        if report:
+            await app.bot.send_message(chat_id=CHAT_ID, text=report)
+            logger.info(f"Мониторинг: отправлен отчёт ({result['new_mentions']} упоминаний)")
+        else:
+            logger.info("Мониторинг: новых упоминаний нет")
+    except Exception as e:
+        logger.error(f"Ошибка мониторинга по расписанию: {e}")
 
 # ─────────────────────────────────────────────
 # 7. Запуск
@@ -382,6 +396,13 @@ async def main():
         minute=0,
         args=[app],
     )
+    scheduler.add_job(
+        scheduled_monitoring,
+        trigger="interval",
+        hours=2,
+        args=[app],
+    )
+    init_db()
     scheduler.start()
 
     logger.info("Бот запущен")
