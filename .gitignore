@@ -3,3 +3,4 @@ venv/
 credentials.json
 *.pyc
 __pycache__/
+bot.db
