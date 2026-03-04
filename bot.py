@@ -16,6 +16,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from monitor import run_monitoring, format_monitoring_report
 from db import init_db
+from handlers_monitor import register_monitor_handlers
 
 import json
 
@@ -340,15 +341,17 @@ async def callback_holidays_week(update: Update, context: ContextTypes.DEFAULT_T
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("📰 Получить дайджест", callback_data="refresh")],
+        [InlineKeyboardButton("🔍 Мониторинг упоминаний", callback_data="mon_menu")],
         [
             InlineKeyboardButton("🎉 Праздники на день", callback_data="holidays_day"),
             InlineKeyboardButton("📆 Праздники на неделю", callback_data="holidays_week"),
         ]
     ])
     await update.message.reply_text(
-        "Привет! Я бот-дайджест.\n"
-        "Каждый день в 09:00 МСК я шлю дайджест автоматически\n",
-        "Нажми кнопку ниже, чтобы получить праздники или дайджест",
+        "Привет! Я бот-дайджест — ваш персональный цифровой сталкер.\n"
+        "Каждый день в 09:00 МСК я врываюсь в чат с дайджестом, как утренний кофе без сахара.\n"
+        "Каждые 2 часа я как Шерлок Холмс выискиваю упоминания ваших \"подопечных\".\n\n"
+        "Нажми на кнопку - получишь результат:",
         reply_markup=keyboard
     )
 
@@ -387,6 +390,7 @@ async def main():
     app.add_handler(CallbackQueryHandler(callback_refresh, pattern="^refresh$"))
     app.add_handler(CallbackQueryHandler(callback_holidays_day, pattern="^holidays_day$"))
     app.add_handler(CallbackQueryHandler(callback_holidays_week, pattern="^holidays_week$"))
+    register_monitor_handlers(app)
 
     scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
     scheduler.add_job(
