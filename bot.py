@@ -368,15 +368,13 @@ async def scheduled_digest(app):
         logger.error(f"Ошибка при отправке по расписанию: {e}")
 
 async def scheduled_monitoring(app):
-    """Фоновый мониторинг: сбор постов + поиск фамилий каждые 2 часа."""
+    """Фоновый мониторинг: сбор постов + поиск фамилий каждые 2 часа. Без отправки."""
     try:
         result = await run_monitoring()
-        report = format_monitoring_report(result)
-        if report:
-            await app.bot.send_message(chat_id=CHAT_ID, text=report)
-            logger.info(f"Мониторинг: отправлен отчёт ({result['new_mentions']} упоминаний)")
-        else:
-            logger.info("Мониторинг: новых упоминаний нет")
+        logger.info(
+            f"Мониторинг: {result['new_posts']} постов, "
+            f"{result['new_mentions']} упоминаний"
+        )
     except Exception as e:
         logger.error(f"Ошибка мониторинга по расписанию: {e}")
 
