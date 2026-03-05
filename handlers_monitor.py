@@ -11,6 +11,8 @@ User flow:
     │           └── результат с пагинацией ← 1/3 →
     └── 📊 Все за сегодня → сводка по всем персонам
 
+Все переходы — edit_message_text (обновляем одно сообщение, не спамим новыми).
+
 Как подключить в bot.py:
     from handlers_monitor import register_monitor_handlers
     register_monitor_handlers(app)
@@ -23,6 +25,41 @@ from db import get_connection
 
 # Сколько упоминаний на одну "страницу" в Telegram
 MENTIONS_PER_PAGE = 5
+
+
+# ─────────────────────────────────────────────
+# Вспомогательная функция: стартовое меню бота
+# ─────────────────────────────────────────────
+
+def build_start_keyboard():
+    """Клавиатура главного меню — такая же как в cmd_start."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📰 Получить дайджест", callback_data="refresh")],
+        [InlineKeyboardButton("🔍 Мониторинг упоминаний", callback_data="mon_menu")],
+        [
+            InlineKeyboardButton("🎉 Праздники на день", callback_data="holidays_day"),
+            InlineKeyboardButton("📆 Праздники на неделю", callback_data="holidays_week"),
+        ]
+    ])
+
+
+START_TEXT = (
+    "Привет! Я бот-дайджест.\n"
+    "Каждый день в 09:00 МСК я шлю дайджест автоматически.\n"
+    "Каждые 2 часа проверяю упоминания отслеживаемых персон.\n\n"
+    "Нажми кнопку ниже:"
+)
+
+
+# ─────────────────────────────────────────────
+# 0. Кнопка "Назад" → главное меню
+# ─────────────────────────────────────────────
+
+async def callback_back_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Возврат в главное меню — редактируем текущее сообщение."""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text(text=START_TEXT, reply_markup=build_start_keyboard())
 
 
 # ─────────────────────────────────────────────
@@ -40,7 +77,7 @@ async def callback_monitor_menu(update: Update, context: ContextTypes.DEFAULT_TY
         [InlineKeyboardButton("◀️ Назад", callback_data="mon_back_start")],
     ])
 
-    await query.message.reply_text(
+    await query.edit_message_text(
         "🔍 Мониторинг упоминаний\n\nВыберите режим:",
         reply_markup=keyboard,
     )
@@ -67,7 +104,7 @@ async def callback_persons_list(update: Update, context: ContextTypes.DEFAULT_TY
     conn.close()
 
     if not persons:
-        await query.message.reply_text("📭 Нет отслеживаемых персон.")
+        await query.edit_message_text("📭 Нет отслеживаемых персон.")
         return
 
     # Формируем кнопки: по 2 в ряд.
@@ -85,7 +122,7 @@ async def callback_persons_list(update: Update, context: ContextTypes.DEFAULT_TY
 
     buttons.append([InlineKeyboardButton("◀️ Назад", callback_data="mon_menu")])
 
-    await query.message.reply_text(
+    await query.edit_message_text(
         "👤 Выберите персону:",
         reply_markup=InlineKeyboardMarkup(buttons),
     )
@@ -110,7 +147,7 @@ async def callback_person_selected(update: Update, context: ContextTypes.DEFAULT
     conn.close()
 
     if not person:
-        await query.message.reply_text("❌ Персона не найдена.")
+        await query.edit_message_text("❌ Персона не найдена.")
         return
 
     keyboard = InlineKeyboardMarkup([
@@ -122,7 +159,7 @@ async def callback_person_selected(update: Update, context: ContextTypes.DEFAULT
         [InlineKeyboardButton("◀️ К списку персон", callback_data="mon_persons")],
     ])
 
-    await query.message.reply_text(
+    await query.edit_message_text(
         f"👤 {person['name']}\nВыберите период:",
         reply_markup=keyboard,
     )
@@ -160,7 +197,7 @@ async def callback_show_results(update: Update, context: ContextTypes.DEFAULT_TY
     ).fetchone()
     if not person:
         conn.close()
-        await query.message.reply_text("❌ Персона не найдена.")
+        await query.edit_message_text("❌ Персона не найдена.")
         return
 
     # Считаем общее количество упоминаний за период
@@ -245,12 +282,7 @@ async def callback_show_results(update: Update, context: ContextTypes.DEFAULT_TY
         ],
     ])
 
-    # Если это переключение страницы — редактируем сообщение.
-    # Если первый показ — отправляем новое.
-    try:
-        await query.edit_message_text(text=text, reply_markup=keyboard)
-    except Exception:
-        await query.message.reply_text(text=text, reply_markup=keyboard)
+    await query.edit_message_text(text=text, reply_markup=keyboard)
 
 
 # ─────────────────────────────────────────────
@@ -322,7 +354,7 @@ async def callback_today_summary(update: Update, context: ContextTypes.DEFAULT_T
         [InlineKeyboardButton("◀️ Назад", callback_data="mon_menu")],
     ])
 
-    await query.message.reply_text(text=text, reply_markup=keyboard)
+    await query.edit_message_text(text=text, reply_markup=keyboard)
 
 
 # ─────────────────────────────────────────────
@@ -344,15 +376,8 @@ def register_monitor_handlers(app):
 
     Вызывается из bot.py одной строкой:
         register_monitor_handlers(app)
-
-    Паттерны callback_data:
-        mon_menu     — главное меню мониторинга
-        mon_persons  — список персон
-        mon_p_*      — выбрана конкретная персона
-        mon_r_*      — результат (упоминания с пагинацией)
-        mon_today    — сводка за сегодня
-        noop         — заглушка
     """
+    app.add_handler(CallbackQueryHandler(callback_back_start, pattern="^mon_back_start$"))
     app.add_handler(CallbackQueryHandler(callback_monitor_menu, pattern="^mon_menu$"))
     app.add_handler(CallbackQueryHandler(callback_persons_list, pattern="^mon_persons$"))
     app.add_handler(CallbackQueryHandler(callback_person_selected, pattern=r"^mon_p_\d+$"))
