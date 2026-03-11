@@ -140,17 +140,47 @@ def fetch_channel_posts(username):
 # ─────────────────────────────────────────────
 # 3. Получаем AI-резюме через GigaChat
 # ─────────────────────────────────────────────
+
+# Максимум каналов в одном запросе к GigaChat.
+# 20 каналов × 5 постов × 300 символов ≈ 30 000 символов — это перебор.
+# При 7 каналах на батч получаем ~10 000 символов — безопасно для контекста.
+GIGACHAT_BATCH_SIZE = 7
+
+
+def _call_gigachat(prompt, attempt=1):
+    """
+    Отправляет один запрос к GigaChat с ретраем.
+    Возвращает текст ответа или None при ошибке.
+    """
+    try:
+        with GigaChat(credentials=GIGACHAT_CREDENTIALS, verify_ssl_certs=False) as giga:
+            response = giga.chat(prompt)
+            text = response.choices[0].message.content
+            return text
+    except Exception as e:
+        logger.error(f"GigaChat ошибка (попытка {attempt}): {e}")
+        if attempt < 2:
+            import time
+            time.sleep(2)
+            return _call_gigachat(prompt, attempt + 1)
+        return None
+
+
 def get_summaries(channels_data):
     if not channels_data:
         return {}
 
-    # Собираем один большой промпт
-    prompt_parts = []
-    for i, ch in enumerate(channels_data, 1):
-        posts_joined = " | ".join(ch["posts"][:5])  # максимум 5 постов
-        prompt_parts.append(f"{i}. @{ch['username']}: {posts_joined}")
+    summaries = {}
+    # Разбиваем каналы на батчи, чтобы не перегружать контекст GigaChat
+    for batch_start in range(0, len(channels_data), GIGACHAT_BATCH_SIZE):
+        batch = channels_data[batch_start:batch_start + GIGACHAT_BATCH_SIZE]
 
-    prompt = (
+        prompt_parts = []
+        for i, ch in enumerate(batch, 1):
+            posts_joined = " | ".join(ch["posts"][:5])
+            prompt_parts.append(f"{i}. @{ch['username']}: {posts_joined}")
+
+        prompt = (
             "Ты — редактор регионального политического дайджеста. "
             "Твоя задача: для каждого Telegram-канала ниже написать ОДНУ строку резюме на русском языке.\n\n"
             "Правила:\n"
@@ -163,32 +193,36 @@ def get_summaries(channels_data):
             "— Формат ответа: только пронумерованный список, ничего лишнего\n\n"
             "Каналы:\n"
             + "\n".join(prompt_parts)
-    )
+        )
 
-    try:
-        with GigaChat(credentials=GIGACHAT_CREDENTIALS, verify_ssl_certs=False) as giga:
-            response = giga.chat(prompt)
-            text = response.choices[0].message.content
-            logger.info(f"GigaChat ответил:\n{text}")
-    except Exception as e:
-        logger.error(f"Ошибка GigaChat: {e}")
-        return {}
+        logger.info(
+            f"GigaChat батч {batch_start // GIGACHAT_BATCH_SIZE + 1}: "
+            f"{len(batch)} каналов, ~{len(prompt)} символов промпта"
+        )
 
-    # Парсим ответ: "1. текст", "2. текст" ...
-    summaries = {}
-    for line in text.strip().split("\n"):
-        line = line.strip()
-        if not line:
+        text = _call_gigachat(prompt)
+        if not text:
+            logger.warning(f"GigaChat не ответил на батч, пропускаю {len(batch)} каналов")
             continue
-        for i, ch in enumerate(channels_data, 1):
-            if line.startswith(f"{i}."):
-                summary = line[len(f"{i}."):].strip()
-                # Убираем @username если GigaChat добавил его в начало
-                if summary.startswith(f"@{ch['username']}:"):
-                    summary = summary[len(f"@{ch['username']}:"):].strip()
-                summaries[ch["username"]] = summary
-                break
 
+        logger.info(f"GigaChat ответ:\n{text}")
+
+        # Парсим ответ: "1. текст", "2. текст" ...
+        for line in text.strip().split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            for i, ch in enumerate(batch, 1):
+                if line.startswith(f"{i}."):
+                    summary = line[len(f"{i}."):].strip()
+                    # Убираем @username если GigaChat добавил его в начало
+                    if summary.startswith(f"@{ch['username']}:"):
+                        summary = summary[len(f"@{ch['username']}:"):].strip()
+                    if summary:
+                        summaries[ch["username"]] = summary
+                    break
+
+    logger.info(f"Получено резюме: {len(summaries)} из {len(channels_data)} каналов")
     return summaries
 
 
@@ -222,7 +256,13 @@ def build_digest():
     summaries = get_summaries(channels_data)
 
     now_msk = datetime.now(timezone(timedelta(hours=3)))
-    header = f"📰 Дайджест за {now_msk.strftime('%d.%m.%Y')}\n\n"
+    header = f"📰 Дайджест за {now_msk.strftime('%d.%m.%Y')}\n"
+
+    # Предупреждение, если резюме не получилось сгенерировать
+    if not summaries:
+        header += "⚠️ AI-резюме временно недоступно\n"
+
+    header += "\n"
 
     # Сортируем по просмотрам — самые популярные первыми
     channels_data.sort(key=lambda x: x["max_views"], reverse=True)
@@ -265,10 +305,8 @@ def get_holidays(days=1):
             resp = requests.get(url, headers=headers, timeout=10)
             soup = BeautifulSoup(resp.text, "html.parser")
 
-            # Ищем заголовок страницы с праздниками — он в теге h1 или title
             items = []
             seen = set()
-            # Праздники в div.block.holidays (не famous-date — это компании и города)
             for block in soup.select("div.block.holidays:not(.famous-date) ul.itemsNet li span.title a"):
                 title = block.get_text(strip=True)
                 if title and title not in seen:
@@ -279,7 +317,7 @@ def get_holidays(days=1):
                 day_name = day_names[target.weekday()]
                 date_str = target.strftime(f"%d.%m ({day_name})")
                 lines.append(f"\n📅 {date_str}:")
-                lines.extend(items[:10])  # максимум 10 праздников на день
+                lines.extend(items[:10])
 
         except Exception as e:
             logger.warning(f"Ошибка загрузки праздников {target.date()}: {e}")
@@ -311,7 +349,6 @@ async def cmd_digest(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def callback_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    # Отправляем новое сообщение с индикатором загрузки
     loading_msg = await query.message.reply_text("⏳ Собираю дайджест, минутку...")
     try:
         text = build_digest()
@@ -336,6 +373,24 @@ async def callback_holidays_week(update: Update, context: ContextTypes.DEFAULT_T
     loading_msg = await query.message.reply_text("⏳ Загружаю праздники...")
     text = get_holidays(days=7)
     await loading_msg.edit_text(text)
+
+
+async def cmd_holidays(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🎉 На день", callback_data="holidays_day"),
+            InlineKeyboardButton("📆 На неделю", callback_data="holidays_week"),
+        ]
+    ])
+    await update.message.reply_text("Выберите период:", reply_markup=keyboard)
+
+
+async def cmd_monitoring(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("👤 По персоне", callback_data="mon_persons")],
+        [InlineKeyboardButton("📊 Все за сегодня", callback_data="mon_today")],
+    ])
+    await update.message.reply_text("🔍 Мониторинг упоминаний\n\nВыберите режим:", reply_markup=keyboard)
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -385,6 +440,8 @@ async def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("digest", cmd_digest))
+    app.add_handler(CommandHandler("holidays", cmd_holidays))
+    app.add_handler(CommandHandler("monitoring", cmd_monitoring))
     app.add_handler(CallbackQueryHandler(callback_refresh, pattern="^refresh$"))
     app.add_handler(CallbackQueryHandler(callback_holidays_day, pattern="^holidays_day$"))
     app.add_handler(CallbackQueryHandler(callback_holidays_week, pattern="^holidays_week$"))
@@ -432,7 +489,7 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"OK")
 
     def log_message(self, format, *args):
-        pass  # отключаем лишние логи
+        pass
 
 
 def run_health_server():
@@ -442,6 +499,5 @@ def run_health_server():
 
 
 if __name__ == "__main__":
-    # Запускаем health check в фоне
     threading.Thread(target=run_health_server, daemon=True).start()
     asyncio.run(main())
