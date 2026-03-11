@@ -147,9 +147,10 @@ def fetch_channel_posts(username):
 GIGACHAT_BATCH_SIZE = 7
 
 
-def _call_gigachat(prompt, attempt=1):
+def _call_gigachat(prompt, batch_channels=None, attempt=1):
     """
     Отправляет один запрос к GigaChat с ретраем.
+    batch_channels — список username'ов каналов в батче (для логов).
     Возвращает текст ответа или None при ошибке.
     """
     try:
@@ -158,11 +159,18 @@ def _call_gigachat(prompt, attempt=1):
             text = response.choices[0].message.content
             return text
     except Exception as e:
-        logger.error(f"GigaChat ошибка (попытка {attempt}): {e}")
+        ch_info = ""
+        if batch_channels:
+            ch_info = f" | каналы: {', '.join(batch_channels)}"
+        logger.error(
+            f"GigaChat ошибка (попытка {attempt}/{2}){ch_info} | "
+            f"промпт ~{len(prompt)} симв. | {type(e).__name__}: {e}",
+            exc_info=True,  # ← полный traceback в лог
+        )
         if attempt < 2:
             import time
-            time.sleep(2)
-            return _call_gigachat(prompt, attempt + 1)
+            time.sleep(3)
+            return _call_gigachat(prompt, batch_channels, attempt + 1)
         return None
 
 
@@ -200,9 +208,13 @@ def get_summaries(channels_data):
             f"{len(batch)} каналов, ~{len(prompt)} символов промпта"
         )
 
-        text = _call_gigachat(prompt)
+        batch_usernames = [ch["username"] for ch in batch]
+        text = _call_gigachat(prompt, batch_channels=batch_usernames)
         if not text:
-            logger.warning(f"GigaChat не ответил на батч, пропускаю {len(batch)} каналов")
+            logger.warning(
+                f"GigaChat не ответил на батч после 2 попыток, "
+                f"пропускаю каналы: {', '.join(batch_usernames)}"
+            )
             continue
 
         logger.info(f"GigaChat ответ:\n{text}")
@@ -256,13 +268,7 @@ def build_digest():
     summaries = get_summaries(channels_data)
 
     now_msk = datetime.now(timezone(timedelta(hours=3)))
-    header = f"📰 Дайджест за {now_msk.strftime('%d.%m.%Y')}\n"
-
-    # Предупреждение, если резюме не получилось сгенерировать
-    if not summaries:
-        header += "⚠️ AI-резюме временно недоступно\n"
-
-    header += "\n"
+    header = f"📰 Дайджест за {now_msk.strftime('%d.%m.%Y')}\n\n"
 
     # Сортируем по просмотрам — самые популярные первыми
     channels_data.sort(key=lambda x: x["max_views"], reverse=True)
@@ -270,14 +276,20 @@ def build_digest():
     lines = []
     for ch in channels_data:
         username = ch["username"]
-        subs = f" · {ch['subs']} подп." if ch["subs"] else ""
         summary = summaries.get(username, "")
 
+        # Нет резюме = не показываем канал (не путаем пользователей)
+        if not summary:
+            continue
+
+        subs = f" · {ch['subs']} подп." if ch["subs"] else ""
         title = ch.get("title") or username
         line = f"📌 {title} (@{username}){subs}"
-        if summary:
-            line += f"\n└ {summary}"
+        line += f"\n└ {summary}"
         lines.append(line)
+
+    if not lines:
+        return "📭 Не удалось сформировать дайджест. Попробуйте позже."
 
     body = "\n\n".join(lines)
     digest = header + body
