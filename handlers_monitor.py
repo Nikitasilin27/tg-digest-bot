@@ -92,11 +92,9 @@ async def callback_persons_list(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     await query.answer()
 
-    # Считаем упоминания за последние 7 дней, а не за всё время.
-    # Так число в кнопке совпадает с тем, что пользователь увидит
-    # при выборе периода "Неделя".
+    # Считаем упоминания за последние 24 часа — "что нового".
     now = datetime.now(timezone.utc)
-    week_ago = (now - timedelta(days=7)).isoformat()
+    day_ago = (now - timedelta(hours=24)).isoformat()
 
     conn = get_connection()
     persons = conn.execute(
@@ -106,7 +104,7 @@ async def callback_persons_list(update: Update, context: ContextTypes.DEFAULT_TY
            WHERE p.active = 1
            GROUP BY p.id
            ORDER BY cnt DESC""",
-        (week_ago,),
+        (day_ago,),
     ).fetchall()
     conn.close()
 
@@ -115,11 +113,14 @@ async def callback_persons_list(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     # Формируем кнопки: по 2 в ряд.
-    # Показываем имя + количество упоминаний за неделю.
+    # Показываем имя + новые упоминания за 24ч.
     buttons = []
     row = []
     for p in persons:
-        label = f"{p['name']} ({p['cnt']})"
+        if p['cnt'] > 0:
+            label = f"{p['name']} {p['cnt']}"
+        else:
+            label = f"{p['name']}"
         row.append(InlineKeyboardButton(label, callback_data=f"mon_p_{p['id']}"))
         if len(row) == 2:
             buttons.append(row)
@@ -130,7 +131,7 @@ async def callback_persons_list(update: Update, context: ContextTypes.DEFAULT_TY
     buttons.append([InlineKeyboardButton("◀️ Назад", callback_data="mon_menu")])
 
     await query.edit_message_text(
-        "👤 Выберите персону (упоминания за 7 дней):",
+        "👤 Выберите персону:",
         reply_markup=InlineKeyboardMarkup(buttons),
     )
 
