@@ -92,14 +92,21 @@ async def callback_persons_list(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     await query.answer()
 
+    # Считаем упоминания за последние 7 дней, а не за всё время.
+    # Так число в кнопке совпадает с тем, что пользователь увидит
+    # при выборе периода "Неделя".
+    now = datetime.now(timezone.utc)
+    week_ago = (now - timedelta(days=7)).isoformat()
+
     conn = get_connection()
     persons = conn.execute(
         """SELECT p.id, p.name, p.group_tag, COUNT(m.id) as cnt
            FROM persons p
-           LEFT JOIN mentions m ON m.person_id = p.id
+           LEFT JOIN mentions m ON m.person_id = p.id AND m.post_date >= ?
            WHERE p.active = 1
            GROUP BY p.id
-           ORDER BY cnt DESC"""
+           ORDER BY cnt DESC""",
+        (week_ago,),
     ).fetchall()
     conn.close()
 
@@ -108,7 +115,7 @@ async def callback_persons_list(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     # Формируем кнопки: по 2 в ряд.
-    # Показываем имя + количество упоминаний в скобках.
+    # Показываем имя + количество упоминаний за неделю.
     buttons = []
     row = []
     for p in persons:
@@ -123,7 +130,7 @@ async def callback_persons_list(update: Update, context: ContextTypes.DEFAULT_TY
     buttons.append([InlineKeyboardButton("◀️ Назад", callback_data="mon_menu")])
 
     await query.edit_message_text(
-        "👤 Выберите персону:",
+        "👤 Выберите персону (упоминания за 7 дней):",
         reply_markup=InlineKeyboardMarkup(buttons),
     )
 
