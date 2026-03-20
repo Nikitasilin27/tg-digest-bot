@@ -3,8 +3,6 @@ import asyncio
 import logging
 import json
 import requests
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta, timezone
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
@@ -17,8 +15,6 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from monitor import run_monitoring, format_monitoring_report
 from db import init_db
 from handlers_monitor import register_monitor_handlers
-
-import json
 
 load_dotenv()
 
@@ -141,11 +137,6 @@ def fetch_channel_posts(username):
 # 3. Получаем AI-резюме через GigaChat
 # ─────────────────────────────────────────────
 
-# Максимум каналов в одном запросе к GigaChat.
-# 20 каналов × 5 постов × 300 символов ≈ 30 000 символов — это перебор.
-# При 7 каналах на батч получаем ~10 000 символов — безопасно для контекста.
-GIGACHAT_BATCH_SIZE = 7
-
 
 def _call_gigachat(prompt, batch_channels=None, attempt=1):
     """
@@ -175,55 +166,45 @@ def _call_gigachat(prompt, batch_channels=None, attempt=1):
 
 
 def get_summaries(channels_data):
+    """
+    Получает AI-резюме для каждого канала отдельным запросом.
+
+    Почему по одному, а не батчами:
+    - GigaChat путал содержание между каналами в батче
+    - GigaChat галлюцинировал детали (города, названия) при сжатии
+    - Цензура одного канала убивала весь батч
+    22 канала × ~1.5 сек = ~33 сек — приемлемо для утреннего дайджеста.
+    """
     if not channels_data:
         return {}
 
     summaries = {}
-    # Разбиваем каналы на батчи, чтобы не перегружать контекст GigaChat
-    for batch_start in range(0, len(channels_data), GIGACHAT_BATCH_SIZE):
-        batch = channels_data[batch_start:batch_start + GIGACHAT_BATCH_SIZE]
 
-        prompt_parts = []
-        for i, ch in enumerate(batch, 1):
-            posts_joined = " | ".join(ch["posts"][:5])
-            prompt_parts.append(f"{i}. @{ch['username']}: {posts_joined}")
+    for ch in channels_data:
+        posts_joined = " | ".join(ch["posts"][:5])
 
         prompt = (
-            "Ты — редактор новостного дайджеста региональных Telegram-каналов. "
-            "Твоя задача: для каждого канала ниже написать ОДНУ короткую строку-резюме на русском языке. "
-            "Это обычная сводка новостей, без оценок и мнений.\n\n"
-            "ВАЖНО: резюме каждого канала должно описывать ТОЛЬКО посты ЭТОГО канала. "
-            "Не смешивай содержание разных каналов. Номер резюме = номер канала.\n\n"
-            "Правила:\n"
-            "— Максимум 80 символов на резюме\n"
-            "— Только факт: кто + что сделал/сказал/решил\n"
-            "— Без вводных слов ('канал сообщает', 'автор пишет' и т.д.)\n"
-            "— Без имён пользователей и ссылок\n"
-            "— Не используй эмодзи\n"
-            "— Если постов нет или они нерелевантны — пропусти номер\n"
-            "— Формат ответа: СТРОГО пронумерованный список (1. ... 2. ... 3. ...), ничего лишнего\n"
-            "— Не добавляй строки без номеров\n\n"
-            "Каналы:\n"
-            + "\n".join(prompt_parts)
+            "Напиши ОДНУ строку-резюме (максимум 80 символов) по постам Telegram-канала.\n\n"
+            "СТРОГИЕ ПРАВИЛА:\n"
+            "— Используй ТОЛЬКО факты из текста ниже. НЕ ДОДУМЫВАЙ города, имена, числа, детали.\n"
+            "— Если в тексте не указан город — не добавляй город.\n"
+            "— Только суть: кто + что сделал. Без вводных слов, без эмодзи.\n"
+            "— Если не можешь определить тему — ответь: ПРОПУСК\n\n"
+            f"Посты канала @{ch['username']}:\n{posts_joined}"
         )
 
-        logger.info(
-            f"GigaChat батч {batch_start // GIGACHAT_BATCH_SIZE + 1}: "
-            f"{len(batch)} каналов, ~{len(prompt)} символов промпта"
-        )
+        logger.info(f"GigaChat → @{ch['username']}, ~{len(prompt)} симв.")
+        # Логируем содержимое промпта для отладки галлюцинаций
+        logger.debug(f"GigaChat промпт @{ch['username']}:\n{prompt}")
 
-        batch_usernames = [ch["username"] for ch in batch]
-        text = _call_gigachat(prompt, batch_channels=batch_usernames)
+        text = _call_gigachat(prompt, batch_channels=[ch["username"]])
         if not text:
-            logger.warning(
-                f"GigaChat не ответил на батч после 2 попыток, "
-                f"пропускаю каналы: {', '.join(batch_usernames)}"
-            )
+            logger.warning(f"GigaChat не ответил для @{ch['username']}")
             continue
 
-        logger.info(f"GigaChat ответ:\n{text}")
+        logger.info(f"GigaChat ← @{ch['username']}: {text[:150]}")
 
-        # Детекция цензуры GigaChat — если вместо резюме пришла отписка
+        # Детекция цензуры
         censorship_markers = [
             "не обладают собственным мнением",
             "чувствительные темы",
@@ -232,27 +213,27 @@ def get_summaries(channels_data):
             "не могу выполнить",
         ]
         if any(marker in text.lower() for marker in censorship_markers):
-            logger.warning(
-                f"⚠️ GigaChat ОТЦЕНЗУРИЛ батч! "
-                f"Каналы: {', '.join(batch_usernames)} | "
-                f"Ответ: {text[:200]}"
-            )
+            logger.warning(f"⚠️ GigaChat ОТЦЕНЗУРИЛ @{ch['username']}: {text[:200]}")
             continue
 
-        # Парсим ответ: "1. текст", "2. текст" ...
-        for line in text.strip().split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-            for i, ch in enumerate(batch, 1):
-                if line.startswith(f"{i}."):
-                    summary = line[len(f"{i}."):].strip()
-                    # Убираем @username если GigaChat добавил его в начало
-                    if summary.startswith(f"@{ch['username']}:"):
-                        summary = summary[len(f"@{ch['username']}:"):].strip()
-                    if summary:
-                        summaries[ch["username"]] = summary
-                    break
+        # Пропуск — GigaChat не смог определить тему
+        if "ПРОПУСК" in text.strip().upper():
+            logger.info(f"GigaChat пропустил @{ch['username']}")
+            continue
+
+        # Чистим ответ: убираем возможную нумерацию "1. " или тире в начале
+        summary = text.strip()
+        if len(summary) > 2 and summary[:2] in ("1.", "—", "–"):
+            summary = summary[2:].strip()
+        if summary.startswith("-"):
+            summary = summary[1:].strip()
+
+        # Убираем @username если GigaChat добавил
+        if summary.lower().startswith(f"@{ch['username'].lower()}"):
+            summary = summary[len(ch['username']) + 1:].strip().lstrip(":").strip()
+
+        if summary:
+            summaries[ch["username"]] = summary
 
     logger.info(f"Получено резюме: {len(summaries)} из {len(channels_data)} каналов")
     return summaries
@@ -511,25 +492,5 @@ async def main():
         await app.shutdown()
 
 
-# ─────────────────────────────────────────────
-# Health check сервер (чтобы Render не засыпал)
-# ─────────────────────────────────────────────
-class HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"OK")
-
-    def log_message(self, format, *args):
-        pass
-
-
-def run_health_server():
-    port = int(os.getenv("PORT", 8080))
-    server = HTTPServer(("0.0.0.0", port), HealthHandler)
-    server.serve_forever()
-
-
 if __name__ == "__main__":
-    threading.Thread(target=run_health_server, daemon=True).start()
     asyncio.run(main())
